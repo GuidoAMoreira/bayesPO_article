@@ -67,11 +67,12 @@ po_model <- bayesPO_model(po = cbind(po_data$x_observed, po_data$w_observed),
 
 estim = fit_bayesPO(object = po_model, background = cbind(x_background, w_background),
                     area = 1, mcmc_setup = list(
-                      n_iter = 1e4, thin = 1, burnin = 0
+                      iter = 5e2, thin = 1, burnin = 0
                     ))
 
 #### Convergence diagnostics ####
 library(bayesplot)
+color_scheme_set("green")
 color_scheme_set("gray")
 estimarray <- as.array(estim)
 g <- mcmc_trace(estimarray)
@@ -79,3 +80,8 @@ g
 ggplot2::ggsave(paste0("Aux/traceplots.pdf"), plot = g,
        device = "pdf", width = 8, height = 8 / gr)
 # log Posterior seems to have converged
+
+estim_plus = fit_bayesPO(estim, background = cbind(x_background, w_background),
+                         mcmc_setup = list(
+                           iter = 1e3, thin = 1, burnin = 0
+                         ))
