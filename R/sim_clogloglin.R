@@ -104,16 +104,23 @@ ggplot(
 
 #### Do a lot of them ####
 library(ggplot2)
+library(doParallel)
+library(foreach)
+registerDoParallel(10)
 
-set.seed(123)
+seeds <- 1:300
 b <- c(-1, 2); d <- c(3, 4); ls <- 1e3
 nb <- length(b); nd <- length(d)
-n_graph <- 500; xs <- seq(-3, 3, len = n_graph)
-ns <- matrix(0, 3, 10)
-results <- matrix(0, 1e4, 10)
+n_graph <- 500; xs <- seq(-1, 1, len = n_graph)
+ns <- matrix(0, 3, 100)
+results <- matrix(0, 1e4, 100)
+allMaxBias <- rep(0, 100)
 
 for(j in 1:3){
-  for(i in 1:10){
+  cat("Starting set",j,"\b.\n")
+  results <- do.call(cbind, foreach(i = 1:100) %dopar% {
+  #for(i in 1:100){
+    set.seed(seeds[(j - 1) * 100 + i])
     print(paste("Starting chain",i))
     po_data <- genLogitLink(b, d, ls)
     print(paste0("po points: ", nrow(po_data$position_observed)))
@@ -137,11 +144,11 @@ for(j in 1:3){
     
     estim = fit_bayesPO(object = po_model, background = cbind(x_background, w_background),
                         area = 1, mcmc_setup = list(
-                          n_iter = 2e4, thin = 2, burnin = 1e4
+                          iter = 2e4, thin = 2, burnin = 1e4
                         ))
     # Saving results
     nmb <- substr(format(i/100, nsmall = 2), 3,4)
-    saveRDS(estim, paste0("Aux/clogloglin_multi",nmb,".rds"))
+    #saveRDS(estim, paste0("Aux/clogloglin_multi",nmb,".rds"))
     #estim <- readRDS(paste0("Aux/clogloglin_multi",nmb,".rds"))
     
     estim_intensities <- apply(as.matrix(estim), 1, \(params) exp(- log1pexp_C(-(
@@ -149,17 +156,79 @@ for(j in 1:3){
     ))) * params[5])
     
     results[, i] <- rowMeans(estim_intensities)
-  }
+  })
+  saveRDS(results, paste0("Aux/clogloglin_multi", j, ".rda"))
+  #results <- readRDS(paste0("Aux/clogloglin_multi", j, ".rda"))
   
-  n_graph <- 500; xs <- seq(-3, 3, len = n_graph)
   trueIntensity <- exp(log1mexp_C(-exp(cbind(rep(1, n_graph), xs) %*% b))) * ls
   g <- ggplot(data.frame(Covariate = xs, Intensity = trueIntensity),
-              aes(Covariate, Intensity)) + theme_bw() + geom_line()
-  for (i in 1:10)
+              aes(Covariate, Intensity)) + theme_bw() +
+    theme(axis.text = element_text(size = 20), axis.title = element_text(size = 20))
+  for (i in 1:100)
     g <- g + geom_line(data = data.frame(Covariate = xs,
                                          Intensity = results[, i]),
                        color = "darkgrey")
-  g
+  g <- g + geom_line()
   ggsave(paste0("Aux/mcloglog",j,"IntM.eps"), plot = g,
+         device = "eps", width = 8, height = 8 / gr)
+
+  ## Relative bias
+  g <- ggplot(data.frame(Covariate = xs), aes(Covariate)) + theme_bw()
+  rbMat <- matrix(0, 100, n_graph)
+  for (i in 1:100) {
+    rb <- (results[, i] - trueIntensity) / trueIntensity
+    g <- g + geom_line(aes(y = relBias), color = "darkgrey",
+                       data = data.frame(Covariate = xs, relBias = rb))
+    allMaxBias[i] <- max(rb)
+    rbMat[i, ] <- rb
+  }
+  g <- g +
+    geom_line(aes(y = rbInterval),
+               data = data.frame(Covariate = xs, rbInterval = apply(rbMat, 2, quantile, 0.125))) +
+    geom_line(aes(y = rbInterval),
+              data = data.frame(Covariate = xs, rbInterval = apply(rbMat, 2, quantile, 0.875)))
+  g <- g + labs(y = "Relative Bias") + theme(axis.text = element_text(size = 20),
+                                             axis.title = element_text(size = 20))
+  ggsave(paste0("Aux/mcloglog",j,"relBias.eps"), plot = g,
+         device = "eps", width = 8, height = 8 / gr)
+}
+
+#### Recovering ####
+results <- matrix(0, 1e4, 100)
+allMaxBias <- rep(0, 100)
+
+for(j in 1:3){
+  results <- readRDS(paste0("Aux/clogloglin_multi", j, ".rda"))
+  
+  trueIntensity <- exp(log1mexp_C(-exp(cbind(rep(1, n_graph), xs) %*% b))) * ls
+  g <- ggplot(data.frame(Covariate = xs, Intensity = trueIntensity),
+              aes(Covariate, Intensity)) + theme_bw() +
+    theme(axis.text = element_text(size = 20), axis.title = element_text(size = 20))
+  for (i in 1:100)
+    g <- g + geom_line(data = data.frame(Covariate = xs,
+                                         Intensity = results[, i]),
+                       color = "darkgrey")
+  g <- g + geom_line()
+  ggsave(paste0("Aux/mcloglog",j,"IntM.eps"), plot = g,
+         device = "eps", width = 8, height = 8 / gr)
+  
+  ## Relative bias
+  g <- ggplot(data.frame(Covariate = xs), aes(Covariate)) + theme_bw()
+  rbMat <- matrix(0, 100, n_graph)
+  for (i in 1:100) {
+    rb <- (results[, i] - trueIntensity) / trueIntensity
+    g <- g + geom_line(aes(y = relBias), color = "darkgrey",
+                       data = data.frame(Covariate = xs, relBias = rb))
+    allMaxBias[i] <- max(rb)
+    rbMat[i, ] <- rb
+  }
+  g <- g +
+    geom_line(aes(y = rbInterval),
+              data = data.frame(Covariate = xs, rbInterval = apply(rbMat, 2, quantile, 0.125))) +
+    geom_line(aes(y = rbInterval),
+              data = data.frame(Covariate = xs, rbInterval = apply(rbMat, 2, quantile, 0.875)))
+  g <- g + labs(y = "Relative Bias") + theme(axis.text = element_text(size = 20),
+                                             axis.title = element_text(size = 20))
+  ggsave(paste0("Aux/mcloglog",j,"relBias.eps"), plot = g,
          device = "eps", width = 8, height = 8 / gr)
 }
